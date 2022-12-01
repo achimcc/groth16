@@ -14,16 +14,16 @@ use rayon::prelude::*;
 #[inline]
 /// Computes the inner product of `terms` with `assignment`.
 pub fn evaluate_constraint<'a, LHS, RHS, R>(terms: &'a [(LHS, usize)], assignment: &'a [RHS]) -> R
-where
-    LHS: One + Send + Sync + PartialEq,
-    RHS: Send + Sync + core::ops::Mul<&'a LHS, Output = RHS> + Copy,
-    R: Zero + Send + Sync + AddAssign<RHS> + core::iter::Sum,
+    where
+        LHS: One + Send + Sync + PartialEq,
+        RHS: Send + Sync + core::ops::Mul<&'a LHS, Output=RHS> + Copy,
+        R: Zero + Send + Sync + AddAssign<RHS> + core::iter::Sum,
 {
     // Need to wrap in a closure when using Rayon
     #[cfg(feature = "parallel")]
-    let zero = || R::zero();
+        let zero = || R::zero();
     #[cfg(not(feature = "parallel"))]
-    let zero = R::zero();
+        let zero = R::zero();
 
     let res = cfg_iter!(terms).fold(zero, |mut sum, (coeff, index)| {
         let val = &assignment[*index];
@@ -69,7 +69,7 @@ pub trait R1CStoQAP {
             prover.instance_assignment.as_slice(),
             prover.witness_assignment.as_slice(),
         ]
-        .concat();
+            .concat();
 
         Self::witness_map_from_matrices::<F, D>(
             &matrices,
@@ -207,8 +207,6 @@ impl R1CStoQAP for LibsnarkReduction {
             *ab_i -= &c_i;
         });
 
-        coset_domain.ifft_in_place(&mut ab);
-
         Ok(ab)
     }
 
@@ -220,8 +218,10 @@ impl R1CStoQAP for LibsnarkReduction {
         delta_inverse: F,
     ) -> Result<Vec<F>, SynthesisError> {
         let c = z_over_coset_inv * zt * &delta_inverse;
-        let scalars = cfg_into_iter!(0..max_power)
-            .map(|i| c * &t.pow([i as u64]))
+        let domain = D::new_coset(max_power + 1, F::GENERATOR).ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+        let lis_at_tau = domain.evaluate_all_lagrange_coefficients(t);
+        let scalars = cfg_into_iter!(lis_at_tau)
+            .map(|li_at_tau| c * li_at_tau)
             .collect::<Vec<_>>();
         Ok(scalars)
     }
