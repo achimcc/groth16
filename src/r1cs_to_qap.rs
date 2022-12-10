@@ -14,16 +14,16 @@ use rayon::prelude::*;
 #[inline]
 /// Computes the inner product of `terms` with `assignment`.
 pub fn evaluate_constraint<'a, LHS, RHS, R>(terms: &'a [(LHS, usize)], assignment: &'a [RHS]) -> R
-where
-    LHS: One + Send + Sync + PartialEq,
-    RHS: Send + Sync + core::ops::Mul<&'a LHS, Output = RHS> + Copy,
-    R: Zero + Send + Sync + AddAssign<RHS> + core::iter::Sum,
+    where
+        LHS: One + Send + Sync + PartialEq,
+        RHS: Send + Sync + core::ops::Mul<&'a LHS, Output=RHS> + Copy,
+        R: Zero + Send + Sync + AddAssign<RHS> + core::iter::Sum,
 {
     // Need to wrap in a closure when using Rayon
     #[cfg(feature = "parallel")]
-    let zero = || R::zero();
+        let zero = || R::zero();
     #[cfg(not(feature = "parallel"))]
-    let zero = R::zero();
+        let zero = R::zero();
 
     let res = cfg_iter!(terms).fold(zero, |mut sum, (coeff, index)| {
         let val = &assignment[*index];
@@ -51,7 +51,7 @@ pub trait R1CStoQAP {
     fn instance_map_with_evaluation<F: PrimeField, D: EvaluationDomain<F>>(
         cs: ConstraintSystemRef<F>,
         t: &F,
-    ) -> Result<(Vec<F>, Vec<F>, Vec<F>, F, usize, usize), SynthesisError>;
+    ) -> Result<(Vec<F>, Vec<F>, Vec<F>, F, F, usize, usize), SynthesisError>;
 
     #[inline]
     /// Computes a QAP witness corresponding to the R1CS witness defined by `cs`.
@@ -69,7 +69,7 @@ pub trait R1CStoQAP {
             prover.instance_assignment.as_slice(),
             prover.witness_assignment.as_slice(),
         ]
-        .concat();
+            .concat();
 
         Self::witness_map_from_matrices::<F, D>(
             &matrices,
@@ -93,6 +93,7 @@ pub trait R1CStoQAP {
         max_power: usize,
         t: F,
         zt: F,
+        x: F,
         delta_inverse: F,
     ) -> Result<Vec<F>, SynthesisError>;
 }
@@ -106,13 +107,17 @@ impl R1CStoQAP for LibsnarkReduction {
     fn instance_map_with_evaluation<F: PrimeField, D: EvaluationDomain<F>>(
         cs: ConstraintSystemRef<F>,
         t: &F,
-    ) -> R1CSResult<(Vec<F>, Vec<F>, Vec<F>, F, usize, usize)> {
+    ) -> R1CSResult<(Vec<F>, Vec<F>, Vec<F>, F, F, usize, usize)> {
         let matrices = cs.to_matrices().unwrap();
         let domain_size = cs.num_constraints() + cs.num_instance_variables();
         let domain = D::new(domain_size).ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
         let domain_size = domain.size();
 
         let zt = domain.evaluate_vanishing_polynomial(*t);
+        let z_over_coset_inv = domain
+            .evaluate_vanishing_polynomial(F::GENERATOR)
+            .inverse()
+            .unwrap();
 
         // Evaluate all Lagrange polynomials
         let coefficients_time = start_timer!(|| "Evaluate Lagrange coefficients");
@@ -144,7 +149,7 @@ impl R1CStoQAP for LibsnarkReduction {
             }
         }
 
-        Ok((a, b, c, zt, qap_num_variables, domain_size))
+        Ok((a, b, c, zt, z_over_coset_inv, qap_num_variables, domain_size))
     }
 
     fn witness_map_from_matrices<F: PrimeField, D: EvaluationDomain<F>>(
@@ -198,16 +203,9 @@ impl R1CStoQAP for LibsnarkReduction {
         domain.ifft_in_place(&mut c);
         coset_domain.fft_in_place(&mut c);
 
-        let vanishing_polynomial_over_coset = domain
-            .evaluate_vanishing_polynomial(F::GENERATOR)
-            .inverse()
-            .unwrap();
         cfg_iter_mut!(ab).zip(c).for_each(|(ab_i, c_i)| {
             *ab_i -= &c_i;
-            *ab_i *= &vanishing_polynomial_over_coset;
         });
-
-        coset_domain.ifft_in_place(&mut ab);
 
         Ok(ab)
     }
@@ -216,10 +214,14 @@ impl R1CStoQAP for LibsnarkReduction {
         max_power: usize,
         t: F,
         zt: F,
+        z_over_coset_inv: F,
         delta_inverse: F,
     ) -> Result<Vec<F>, SynthesisError> {
-        let scalars = cfg_into_iter!(0..max_power)
-            .map(|i| zt * &delta_inverse * &t.pow([i as u64]))
+        let c = z_over_coset_inv * zt * &delta_inverse;
+        let domain = D::new_coset(max_power + 1, F::GENERATOR).ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+        let lis_at_tau = domain.evaluate_all_lagrange_coefficients(t);
+        let scalars = cfg_into_iter!(lis_at_tau)
+            .map(|li_at_tau| c * li_at_tau)
             .collect::<Vec<_>>();
         Ok(scalars)
     }

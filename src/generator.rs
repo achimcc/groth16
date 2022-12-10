@@ -133,7 +133,7 @@ where
 
     let reduction_time = start_timer!(|| "R1CS to QAP Instance Map with Evaluation");
     let num_instance_variables = cs.num_instance_variables();
-    let (a, b, c, zt, qap_num_variables, m_raw) =
+    let (a, b, c, zt, z_over_coset_inv, qap_num_variables, m_raw) =
         QAP::instance_map_with_evaluation::<E::ScalarField, D<E::ScalarField>>(cs, &t)?;
     end_timer!(reduction_time);
 
@@ -211,7 +211,7 @@ where
         scalar_bits,
         g1_window,
         &g1_table,
-        &QAP::h_query_scalars::<_, D<E::ScalarField>>(m_raw - 1, t, zt, delta_inverse)?,
+        &QAP::h_query_scalars::<_, D<E::ScalarField>>(m_raw - 1, t, zt, z_over_coset_inv, delta_inverse)?,
     );
 
     end_timer!(h_time);
